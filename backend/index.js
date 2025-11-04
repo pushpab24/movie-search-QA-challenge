@@ -1,15 +1,16 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Global variables - bad practice
 let favorites = [];
-let apiKey = '';
+let apiKey = process.env.OMDB_API_KEY || 'demo';
 
 // Middleware - poorly configured
 app.use(cors());
@@ -23,19 +24,20 @@ if (process.env.OMDB_API_KEY) {
   apiKey = 'demo'; // This will cause issues
 }
 
+async function initializeData() {
 // Load favorites from file - no error handling
-try {
-  const data = fs.readFileSync('favorites.json', 'utf8');
-  favorites = JSON.parse(data);
-} catch (err) {
-  console.log('No favorites file found, starting empty');
-  favorites = [];
+	try {
+	  const data = await fs.readFileSync('favorites.json', 'utf8');
+	  favorites = JSON.parse(data);
+	} catch (err) {
+	  console.log('No favorites file found, starting empty');
+	  favorites = [];
+	}
 }
-
 // Save favorites function - inefficient, saves on every change
-function saveFavorites() {
+async function saveFavorites() {
   try {
-    fs.writeFileSync('favorites.json', JSON.stringify(favorites, null, 2));
+    await fs.writeFileSync('favorites.json', JSON.stringify(favorites, null, 2));
   } catch (err) {
     console.log('Failed to save favorites');
   }
@@ -44,7 +46,7 @@ function saveFavorites() {
 // Search movies endpoint - poorly structured
 app.get('/movies/search', async (req, res) => {
   const query = req.query.q;
-  const page = req.query.page || 1;
+  const page = parseInt(req.query.page) || 1;
   
   if (!query) {
     return res.json({ movies: [], totalResults: 0 });
@@ -52,12 +54,13 @@ app.get('/movies/search', async (req, res) => {
 
   try {
     // Hardcoded URL - bad practice
-    const url = `http://www.omdbapi.com/?apikey=${apiKey}&s=${query}&page=${page}`;
+	const OMDB_URL = 'https://www.omdbapi.com/';
+    const url = `${OMDB_URL}?apikey=${apiKey}&s=${encodeURIComponent(query)}&page=${page}`;
     const response = await axios.get(url);
     
     // No error handling for API response
     if (response.data.Response === 'False') {
-      return res.json({ movies: [], totalResults: 0, error: response.data.Error });
+      return res.status(404).json({ movies: [], totalResults: 0, error: response.data.Error });
     }
     
     // Inconsistent response structure
@@ -75,12 +78,12 @@ app.get('/movies/search', async (req, res) => {
 });
 
 // Get favorites - no validation
-app.get('/favorites', (req, res) => {
+app.get('/favorites', async (req, res) => {
   res.json({ favorites: favorites });
 });
 
 // Add favorite - no duplicate checking, no validation
-app.post('/favorites', (req, res) => {
+app.post('/favorites', async (req, res) => {
   const movie = req.body;
   
   // No validation of movie object
@@ -90,13 +93,13 @@ app.post('/favorites', (req, res) => {
   
   // Add without checking for duplicates
   favorites.push(movie);
-  saveFavorites();
+  await saveFavorites();
   
-  res.json({ success: true });
+  res.status(201).json({ success: true, movie });
 });
 
 // Remove favorite - inefficient search
-app.delete('/favorites/:imdbID', (req, res) => {
+app.delete('/favorites/:imdbID', async (req, res) => {
   const imdbID = req.params.imdbID;
   
   // Inefficient linear search
@@ -123,7 +126,12 @@ app.get('/health', (req, res) => {
 });
 
 // Start server - no graceful shutdown
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API Key: ${apiKey.substring(0, 4)}...`);
-});
+async function startServer() {
+	await initializeData();
+	app.listen(PORT, () => {
+	  console.log(`Server running on port ${PORT}`);
+	  console.log(`API Key: ${apiKey.substring(0, 4)}...`);
+	});
+}
+
+startServer();
